@@ -272,6 +272,31 @@
     text-decoration: underline;
   }
 
+  .panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    margin: -4px -4px -2px 0;
+  }
+  #closePanelBtn {
+    width: 22px;
+    height: 22px;
+    border: none;
+    border-radius: 50%;
+    background: none;
+    color: #f2f2f2;
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0;
+    opacity: 0.7;
+  }
+  #closePanelBtn:hover {
+    opacity: 1;
+    background: rgba(255,255,255,0.1);
+  }
+
   .panel-actions {
     display: flex;
     justify-content: space-between;
@@ -329,6 +354,10 @@
     </div>
 
     <div id="colorPanel">
+      <div class="panel-header">
+        <span>Цвета</span>
+        <button id="closePanelBtn" type="button" aria-label="Закрыть" title="Закрыть">×</button>
+      </div>
       <div class="color-row">
         <label for="numColorInput">Цвет цифр</label>
         <input type="color" id="numColorInput" value="#ffd6e8">
@@ -586,6 +615,11 @@
       colorPanel.style.bottom = (window.innerHeight - rect.top + 6) + "px";
       colorPanel.style.left = "auto";
       colorPanel.style.top = "auto";
+      // в невысоком виджете палитра не помещается над пипеткой — прижимаем к верху
+      if (colorPanel.classList.contains("open") && colorPanel.getBoundingClientRect().top < 4) {
+        colorPanel.style.bottom = "auto";
+        colorPanel.style.top = "4px";
+      }
     }
 
     function closePanel() {
@@ -596,9 +630,12 @@
     colorTrigger.addEventListener("click", (e) => {
       e.stopPropagation();
       const opening = !colorPanel.classList.contains("open");
-      if (opening) positionPanel();
-      if (opening) colorPanel.classList.add("open");
-      else closePanel();
+      if (opening) {
+        colorPanel.classList.add("open");
+        positionPanel();
+      } else {
+        closePanel();
+      }
     });
 
     window.addEventListener("resize", () => {
@@ -608,11 +645,37 @@
     // выход из режима редактирования: тап/клик в любое место вне палитры.
     // pointerdown вместо click — на iOS click не всплывает до document
     // с "некликабельных" элементов, поэтому тап мимо палитры раньше не работал
-    document.addEventListener("pointerdown", (e) => {
+    function onPressOutside(e) {
       if (!colorPanel.classList.contains("open")) return;
       if (colorPanel.contains(e.target) || colorTrigger.contains(e.target)) return;
       closePanel();
+    }
+    document.addEventListener("pointerdown", onPressOutside);
+    document.addEventListener("touchstart", onPressOutside, { passive: true }); // старые iOS без pointer events
+
+    // клик по странице Notion за пределами виджета: iframe теряет фокус.
+    // Но Notion забирает фокус и просто когда мышка уходит с виджета —
+    // такую потерю фокуса (сразу в момент ухода мышки) игнорируем
+    let pointerLeftAt = 0;
+    document.documentElement.addEventListener("mouseleave", () => { pointerLeftAt = Date.now(); });
+    document.documentElement.addEventListener("mouseenter", () => { pointerLeftAt = 0; });
+
+    // нажатие на поле цвета открывает системное окно выбора — оно тоже
+    // уводит фокус из виджета, и закрывать палитру в этот момент нельзя
+    let colorPickerOpenedAt = 0;
+    [numColorInput, bgColorInput].forEach((input) => {
+      input.addEventListener("click", () => { colorPickerOpenedAt = Date.now(); });
+      input.addEventListener("change", () => { colorPickerOpenedAt = 0; });
     });
+
+    window.addEventListener("blur", () => {
+      if (!colorPanel.classList.contains("open")) return;
+      if (colorPickerOpenedAt && Date.now() - colorPickerOpenedAt < 1000) return;
+      if (pointerLeftAt && Date.now() - pointerLeftAt < 400) return;
+      closePanel();
+    });
+
+    document.getElementById("closePanelBtn").addEventListener("click", closePanel);
 
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closePanel();
