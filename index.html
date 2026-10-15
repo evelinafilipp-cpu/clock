@@ -349,6 +349,10 @@
   <script>
     const TIME_ZONE = "Europe/Samara"; // МСК+1 (UTC+4), время Ижевска
 
+    // адрес базы Firebase Realtime Database для синхронизации цветов и
+    // формата между устройствами; пустая строка — синхронизация выключена
+    const FIREBASE_DB_URL = "https://clock-66690-default-rtdb.asia-southeast1.firebasedatabase.app/";
+
     // ---------- масштабирование под размер контейнера (без обрезки и пустых полей) ----------
     const stage = document.getElementById("stage");
     const STAGE_W = 314;
@@ -487,7 +491,13 @@
     // ---------- переключение формата времени (12 / 24) по клику на AM/PM ----------
     document.getElementById("ampm").addEventListener("click", (e) => {
       e.stopPropagation();
-      use24h = !use24h;
+      setFormat(!use24h);
+      pushSettings();
+    });
+
+    function setFormat(value) {
+      if (value === use24h) return;
+      use24h = value;
       try { localStorage.setItem("izhevskClock24h", JSON.stringify(use24h)); } catch (err) { /* игнорируем */ }
 
       const { hour, minute, dayPeriod } = getParts();
@@ -508,7 +518,7 @@
       currentHour = hour;
       currentMinute = minute;
       document.getElementById("ampm").textContent = dayPeriod;
-    });
+    }
 
     // ---------- выбор цвета (пипетка) ----------
     const DEFAULT_NUM_COLOR = "#ffd6e8";
@@ -604,14 +614,6 @@
       closePanel();
     });
 
-    // клик за пределами виджета (по странице Notion) — iframe теряет фокус.
-    // Не закрываем, если фокус ушёл в системное окно выбора цвета
-    window.addEventListener("blur", () => {
-      const active = document.activeElement;
-      if (active && active.type === "color") return;
-      closePanel();
-    });
-
     document.addEventListener("keydown", (e) => {
       if (e.key === "Escape") closePanel();
     });
@@ -619,17 +621,77 @@
     numColorInput.addEventListener("input", () => {
       applyColors(numColorInput.value, bgColorInput.value);
       saveColors(numColorInput.value, bgColorInput.value);
+      pushSettings();
     });
 
     bgColorInput.addEventListener("input", () => {
       applyColors(numColorInput.value, bgColorInput.value);
       saveColors(numColorInput.value, bgColorInput.value);
+      pushSettings();
     });
 
     resetColorsBtn.addEventListener("click", () => {
       applyColors(DEFAULT_NUM_COLOR, DEFAULT_BG_COLOR);
       saveColors(DEFAULT_NUM_COLOR, DEFAULT_BG_COLOR);
+      pushSettings();
     });
+
+    // ---------- синхронизация между устройствами через Firebase ----------
+    // память виджета в мобильном Notion временная, поэтому общие настройки
+    // хранятся в базе: при открытии читаем, при изменении записываем,
+    // и периодически проверяем, не поменяли ли их на другом устройстве
+    const SYNC_ENDPOINT = FIREBASE_DB_URL
+      ? FIREBASE_DB_URL.replace(/\/+$/, "") + "/clock.json"
+      : null;
+    const SYNC_POLL_MS = 5000;
+    let pushTimer = null;
+    let lastPushAt = 0;
+
+    function pushSettings() {
+      if (!SYNC_ENDPOINT) return;
+      lastPushAt = Date.now();
+      // пипетка шлёт событие на каждое движение — отправляем последнее значение
+      clearTimeout(pushTimer);
+      pushTimer = setTimeout(() => {
+        lastPushAt = Date.now();
+        fetch(SYNC_ENDPOINT, {
+          method: "PUT",
+          body: JSON.stringify({
+            numColor: numColorInput.value.toLowerCase(),
+            bgColor: bgColorInput.value.toLowerCase(),
+            h24: use24h
+          })
+        }).catch(() => { /* нет сети — локально всё уже применено */ });
+      }, 400);
+    }
+
+    function pullSettings() {
+      if (!SYNC_ENDPOINT) return;
+      // не перетираем то, что пользователь меняет прямо сейчас
+      if (colorPanel.classList.contains("open") || Date.now() - lastPushAt < 3000) return;
+      fetch(SYNC_ENDPOINT, { cache: "no-store" })
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          if (!data || colorPanel.classList.contains("open") || Date.now() - lastPushAt < 3000) return;
+          const numColor = parseHex(data.numColor);
+          const bgColor = parseHex(data.bgColor);
+          if (numColor && bgColor &&
+              (numColor !== numColorInput.value.toLowerCase() || bgColor !== bgColorInput.value.toLowerCase())) {
+            applyColors(numColor, bgColor);
+            saveColors(numColor, bgColor);
+          }
+          if (typeof data.h24 === "boolean") setFormat(data.h24);
+        })
+        .catch(() => { /* нет сети — остаёмся на локальных настройках */ });
+    }
+
+    if (SYNC_ENDPOINT) {
+      // с синхронизацией ссылка с цветами больше не нужна
+      document.getElementById("copyLinkBtn").style.display = "none";
+      pullSettings();
+      setInterval(() => { if (!document.hidden) pullSettings(); }, SYNC_POLL_MS);
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) pullSettings(); });
+    }
 
     // ---------- ссылка с текущими цветами для вставки в Notion ----------
     const copyLinkBtn = document.getElementById("copyLinkBtn");
