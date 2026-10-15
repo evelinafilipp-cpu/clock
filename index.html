@@ -1,0 +1,673 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Белая подложка в тёмной теме Notion появляется, когда цветовая схема
+     iframe не совпадает со схемой страницы-родителя: браузер тогда
+     заливает фон iframe непрозрачным цветом. "light dark" позволяет
+     документу подстроиться под тёмную тему, и фон остаётся прозрачным. -->
+<meta name="color-scheme" id="colorSchemeMeta" content="light dark">
+<script>
+  // ручное переопределение схемы через ссылку: ?theme=dark или ?theme=light
+  // (на случай, если тема Notion не совпадает с системной темой устройства)
+  (function () {
+    try {
+      const theme = new URLSearchParams(location.search).get("theme");
+      if (theme === "dark" || theme === "light") {
+        document.getElementById("colorSchemeMeta").content = theme;
+        document.documentElement.style.colorScheme = theme;
+      }
+    } catch (e) { /* игнорируем */ }
+  })();
+</script>
+<title>Время в Ижевске</title>
+<style>
+  :root {
+    --num-color: #ffd6e8;
+    --bg-color: #ff8c1a;
+    color-scheme: light dark;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+
+  #viewport {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* "сцена" фиксированного размера, которая масштабируется под контейнер */
+  #stage {
+    position: relative;
+    width: 314px;
+    height: 190px;
+  }
+
+  .clock {
+    display: flex;
+    width: 100%;
+    height: 100%;
+    gap: 8px;
+  }
+
+  .flip-card {
+    position: relative;
+    flex: 1;
+    height: 100%;
+    perspective: 500px;
+  }
+
+  /* единая маска для всей карточки: скругляет и обрезает все слои разом,
+     без "ступенек" на боках между верхней и нижней половинами */
+  .card-mask {
+    position: absolute;
+    inset: 0;
+    border-radius: 18px;
+    overflow: hidden;
+    transform-style: preserve-3d;
+  }
+
+  .flip-card .bg {
+    position: absolute;
+    inset: 0;
+    background: var(--bg-color);
+  }
+  .flip-card .bg::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 0;
+    right: 0;
+    height: 4px;
+    background: rgba(0,0,0,0.12);
+    transform: translateY(-2px);
+  }
+
+  .half {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 50%;
+    overflow: hidden;
+    background: var(--bg-color);
+    display: flex;
+    justify-content: center;
+  }
+  .half.top { top: 0; align-items: flex-end; }
+  .half.bottom { bottom: 0; align-items: flex-start; }
+
+  .half .num {
+    font-size: 100px;
+    font-weight: 800;
+    color: var(--num-color);
+    line-height: 1;
+    transform: translateY(50%);
+    user-select: none;
+  }
+  .half.bottom .num { transform: translateY(-50%); }
+
+  .flap {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 50%;
+    overflow: hidden;
+    background: var(--bg-color);
+    display: flex;
+    justify-content: center;
+    backface-visibility: hidden;
+    will-change: transform;
+    z-index: 5;
+  }
+  .flap .num {
+    font-size: 100px;
+    font-weight: 800;
+    color: var(--num-color);
+    line-height: 1;
+    user-select: none;
+  }
+
+  .flap.top {
+    top: 0;
+    align-items: flex-end;
+    transform-origin: bottom center;
+    transform: rotateX(0deg);
+  }
+  .flap.top .num { transform: translateY(50%); }
+
+  .flap.bottom {
+    bottom: 0;
+    align-items: flex-start;
+    transform-origin: top center;
+    transform: rotateX(90deg);
+  }
+  .flap.bottom .num { transform: translateY(-50%); }
+
+  @keyframes flipTopAnim {
+    from { transform: rotateX(0deg); }
+    to   { transform: rotateX(-90deg); }
+  }
+  @keyframes flipBottomAnim {
+    from { transform: rotateX(90deg); }
+    to   { transform: rotateX(0deg); }
+  }
+
+  .flap.top.playing {
+    animation: flipTopAnim 0.32s cubic-bezier(.37,0,.63,1) forwards;
+  }
+  .flap.bottom.playing {
+    animation: flipBottomAnim 0.32s cubic-bezier(.37,0,.63,1) forwards;
+  }
+
+  .label {
+    position: absolute;
+    left: 14px;
+    bottom: 12px;
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--num-color);
+    opacity: 0.9;
+    z-index: 10;
+    cursor: pointer;
+    user-select: none;
+    background: none;
+    border: none;
+    padding: 0;
+    font-family: inherit;
+    transition: opacity 0.15s ease;
+  }
+  .label:hover {
+    opacity: 1;
+  }
+
+  /* ---------- пипетка + палитра выбора цвета ---------- */
+  /* сидит внутри правой карточки (минуты), в нижнем правом углу —
+     зеркально подписи AM/PM в нижнем левом углу левой карточки */
+  #colorTrigger {
+    position: absolute;
+    right: 14px;
+    bottom: 12px;
+    width: 18px;
+    height: 18px;
+    border: none;
+    border-radius: 50%;
+    background: rgba(0,0,0,0.35);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    padding: 0;
+    transition: background 0.15s ease, transform 0.15s ease;
+  }
+  #colorTrigger:hover {
+    background: rgba(0,0,0,0.55);
+    transform: scale(1.08);
+  }
+  #colorTrigger svg {
+    width: 11px;
+    height: 11px;
+    display: block;
+  }
+
+  #colorPanel {
+    position: fixed;
+    z-index: 1001;
+    background: #2b2b2f;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+    display: none;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 170px;
+    font-size: 12px;
+    color: #f2f2f2;
+  }
+  #colorPanel.open { display: flex; }
+
+  .color-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }
+  .color-row label {
+    opacity: 0.85;
+  }
+  .color-row input[type="color"] {
+    width: 30px;
+    height: 24px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: none;
+    cursor: pointer;
+  }
+
+  #colorPanel .reset-btn {
+    align-self: flex-start;
+    background: none;
+    border: none;
+    color: #9fb4ff;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 0;
+    margin-top: 2px;
+  }
+  #colorPanel .reset-btn:hover {
+    text-decoration: underline;
+  }
+
+  .panel-actions {
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+  }
+
+  #shareLinkInput {
+    display: none;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 10px;
+    padding: 4px 6px;
+    border: none;
+    border-radius: 6px;
+    background: #1d1d20;
+    color: #f2f2f2;
+  }
+  #shareLinkInput.visible { display: block; }
+</style>
+</head>
+<body>
+
+  <div id="viewport">
+    <div id="stage">
+      <div class="clock">
+
+        <div class="flip-card" id="hourCard">
+          <div class="card-mask">
+            <div class="bg"></div>
+            <div class="half top"><div class="num" id="hourTopStatic">--</div></div>
+            <div class="half bottom"><div class="num" id="hourBottomStatic">--</div></div>
+            <div class="flap top" id="hourFlapTop"><div class="num" id="hourFlapTopNum">--</div></div>
+            <div class="flap bottom" id="hourFlapBottom"><div class="num" id="hourFlapBottomNum">--</div></div>
+            <button class="label" id="ampm" type="button" title="Переключить формат времени (12/24)">--</button>
+          </div>
+        </div>
+
+        <div class="flip-card" id="minuteCard">
+          <div class="card-mask">
+            <div class="bg"></div>
+            <div class="half top"><div class="num" id="minTopStatic">--</div></div>
+            <div class="half bottom"><div class="num" id="minBottomStatic">--</div></div>
+            <div class="flap top" id="minFlapTop"><div class="num" id="minFlapTopNum">--</div></div>
+            <div class="flap bottom" id="minFlapBottom"><div class="num" id="minFlapBottomNum">--</div></div>
+            <button id="colorTrigger" type="button" aria-label="Выбор цвета" title="Выбор цвета">
+              <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path d="M18.5 2.5a2.12 2.12 0 0 1 3 3L19 8l-3-3 2.5-2.5Z" fill="#f2f2f2"/>
+                <path d="M16 5 3.5 17.5 2 22l4.5-1.5L19 8l-3-3Z" fill="#f2f2f2"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+      </div>
+    </div>
+
+    <div id="colorPanel">
+      <div class="color-row">
+        <label for="numColorInput">Цвет цифр</label>
+        <input type="color" id="numColorInput" value="#ffd6e8">
+      </div>
+      <div class="color-row">
+        <label for="bgColorInput">Цвет фона</label>
+        <input type="color" id="bgColorInput" value="#ff8c1a">
+      </div>
+      <div class="panel-actions">
+        <button class="reset-btn" id="resetColorsBtn" type="button">Сбросить</button>
+        <button class="reset-btn" id="copyLinkBtn" type="button"
+                title="Ссылка с текущими цветами — вставьте её в Notion, чтобы цвета были одинаковыми на всех устройствах">Ссылка для Notion</button>
+      </div>
+      <input type="text" id="shareLinkInput" readonly>
+    </div>
+  </div>
+
+  <script>
+    const TIME_ZONE = "Europe/Samara"; // МСК+1 (UTC+4), время Ижевска
+
+    // ---------- масштабирование под размер контейнера (без обрезки и пустых полей) ----------
+    const stage = document.getElementById("stage");
+    const STAGE_W = 314;
+    const STAGE_H = 190;
+
+    function fitStage() {
+      const w = window.innerWidth;
+      // масштаб зависит только от ширины контейнера; высота
+      // сцены масштабируется пропорционально вместе с шириной
+      const scale = w / STAGE_W;
+      // используем zoom вместо transform: scale() — zoom пересчитывает
+      // реальную раскладку и рендерит элементы сразу в целевом
+      // разрешении, тогда как transform растягивает уже готовую
+      // (растрированную) текстуру слоя, из-за чего 3D-флип-анимация
+      // после переворота выглядит пиксельной/размытой
+      stage.style.zoom = scale;
+    }
+
+    new ResizeObserver(fitStage).observe(document.body);
+    window.addEventListener("resize", fitStage);
+    fitStage();
+
+    // ---------- логика часов и флип-анимации ----------
+    let currentHour = null;
+    let currentMinute = null;
+
+    const urlParams = new URLSearchParams(location.search);
+
+    // формат из ссылки (?h24=1) — базовый для всех устройств,
+    // локальный выбор на конкретном устройстве имеет приоритет
+    let use24h = urlParams.get("h24") === "1";
+    try {
+      const savedFormat = localStorage.getItem("izhevskClock24h");
+      if (savedFormat !== null) use24h = JSON.parse(savedFormat);
+    } catch (e) { /* игнорируем */ }
+
+    function getParts() {
+      const now = new Date();
+
+      if (use24h) {
+        const hour24 = new Intl.DateTimeFormat("en-GB", {
+          timeZone: TIME_ZONE,
+          hour: "2-digit",
+          hour12: false,
+          hourCycle: "h23"
+        }).format(now).padStart(2, "0");
+
+        const minute = new Intl.DateTimeFormat("en-GB", {
+          timeZone: TIME_ZONE,
+          minute: "2-digit"
+        }).format(now).padStart(2, "0");
+
+        return { hour: hour24, minute, dayPeriod: "24H" };
+      }
+
+      const hourParts = new Intl.DateTimeFormat("en-US", {
+        timeZone: TIME_ZONE,
+        hour: "2-digit",
+        hour12: true
+      }).formatToParts(now);
+
+      const hour12 = hourParts.find(p => p.type === "hour").value.padStart(2, "0");
+      const dayPeriod = hourParts.find(p => p.type === "dayPeriod").value.toUpperCase();
+
+      const minute = new Intl.DateTimeFormat("en-GB", {
+        timeZone: TIME_ZONE,
+        minute: "2-digit"
+      }).format(now).padStart(2, "0");
+
+      return { hour: hour12, minute, dayPeriod };
+    }
+
+    function flip(prefix, oldVal, newVal) {
+      const flapTop = document.getElementById(prefix + "FlapTop");
+      const flapBottom = document.getElementById(prefix + "FlapBottom");
+      const flapTopNum = document.getElementById(prefix + "FlapTopNum");
+      const flapBottomNum = document.getElementById(prefix + "FlapBottomNum");
+      const topStatic = document.getElementById(prefix + "TopStatic");
+      const bottomStatic = document.getElementById(prefix + "BottomStatic");
+
+      // сброс в состояние покоя перед новым флипом
+      flapTop.classList.remove("playing");
+      flapBottom.classList.remove("playing");
+
+      flapTopNum.textContent = oldVal;      // верхняя половина сейчас показывает то, что было
+      flapBottomNum.textContent = newVal;   // нижняя появится с новым значением
+      topStatic.textContent = newVal;       // откроется под верхним флипом
+
+      // форс рефлоу, чтобы анимацию можно было запустить заново
+      void flapTop.offsetWidth;
+
+      const onTopEnd = () => {
+        flapTop.removeEventListener("animationend", onTopEnd);
+        flapBottom.classList.add("playing");
+      };
+      const onBottomEnd = () => {
+        flapBottom.removeEventListener("animationend", onBottomEnd);
+        bottomStatic.textContent = newVal;
+      };
+
+      flapTop.addEventListener("animationend", onTopEnd);
+      flapBottom.addEventListener("animationend", onBottomEnd);
+
+      flapTop.classList.add("playing");
+    }
+
+    function update() {
+      const { hour, minute, dayPeriod } = getParts();
+
+      if (currentHour === null) {
+        document.getElementById("hourTopStatic").textContent = hour;
+        document.getElementById("hourBottomStatic").textContent = hour;
+        document.getElementById("hourFlapTopNum").textContent = hour;
+        document.getElementById("hourFlapBottomNum").textContent = hour;
+      } else if (hour !== currentHour) {
+        flip("hour", currentHour, hour);
+      }
+
+      if (currentMinute === null) {
+        document.getElementById("minTopStatic").textContent = minute;
+        document.getElementById("minBottomStatic").textContent = minute;
+        document.getElementById("minFlapTopNum").textContent = minute;
+        document.getElementById("minFlapBottomNum").textContent = minute;
+      } else if (minute !== currentMinute) {
+        flip("min", currentMinute, minute);
+      }
+
+      currentHour = hour;
+      currentMinute = minute;
+      document.getElementById("ampm").textContent = dayPeriod;
+    }
+
+    update();
+    setInterval(update, 1000);
+
+    // ---------- переключение формата времени (12 / 24) по клику на AM/PM ----------
+    document.getElementById("ampm").addEventListener("click", (e) => {
+      e.stopPropagation();
+      use24h = !use24h;
+      try { localStorage.setItem("izhevskClock24h", JSON.stringify(use24h)); } catch (err) { /* игнорируем */ }
+
+      const { hour, minute, dayPeriod } = getParts();
+
+      // всегда проигрываем анимацию переворота часов при смене формата —
+      // даже если цифры совпадают (напр. 01 AM и 01 в 24ч), чтобы клик
+      // всегда давал заметный визуальный отклик; сама flip() уже
+      // не пикселит, т.к. сцена масштабируется через zoom, а не transform
+      if (currentHour !== null) {
+        flip("hour", currentHour, hour);
+      } else {
+        document.getElementById("hourTopStatic").textContent = hour;
+        document.getElementById("hourBottomStatic").textContent = hour;
+        document.getElementById("hourFlapTopNum").textContent = hour;
+        document.getElementById("hourFlapBottomNum").textContent = hour;
+      }
+
+      currentHour = hour;
+      currentMinute = minute;
+      document.getElementById("ampm").textContent = dayPeriod;
+    });
+
+    // ---------- выбор цвета (пипетка) ----------
+    const DEFAULT_NUM_COLOR = "#ffd6e8";
+    const DEFAULT_BG_COLOR = "#ff8c1a";
+    const STORAGE_KEY = "izhevskClockColors";
+
+    const root = document.documentElement;
+    const colorTrigger = document.getElementById("colorTrigger");
+    const colorPanel = document.getElementById("colorPanel");
+    const numColorInput = document.getElementById("numColorInput");
+    const bgColorInput = document.getElementById("bgColorInput");
+    const resetColorsBtn = document.getElementById("resetColorsBtn");
+
+    function applyColors(numColor, bgColor) {
+      root.style.setProperty("--num-color", numColor);
+      root.style.setProperty("--bg-color", bgColor);
+      numColorInput.value = numColor;
+      bgColorInput.value = bgColor;
+    }
+
+    // localStorage у каждого устройства/приложения свой, поэтому цвета,
+    // выбранные на десктопе, не видны в мобильном Notion. Общий для всех
+    // устройств источник — сама ссылка встраивания: ?num=ffd6e8&bg=ff8c1a
+    function parseHex(value) {
+      if (!value) return null;
+      const hex = value.replace(/^#/, "").toLowerCase();
+      return /^[0-9a-f]{6}$/.test(hex) ? "#" + hex : null;
+    }
+
+    const URL_NUM_COLOR = parseHex(urlParams.get("num"));
+    const URL_BG_COLOR = parseHex(urlParams.get("bg"));
+    // цвета из ссылки, на основе которых сделаны локальные правки
+    const URL_BASE = (URL_NUM_COLOR || "") + "|" + (URL_BG_COLOR || "");
+
+    function baseColors() {
+      return {
+        numColor: URL_NUM_COLOR || DEFAULT_NUM_COLOR,
+        bgColor: URL_BG_COLOR || DEFAULT_BG_COLOR
+      };
+    }
+
+    function saveColors(numColor, bgColor) {
+      try {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify({ numColor, bgColor, base: URL_BASE }));
+      } catch (e) { /* хранилище недоступно — пропускаем */ }
+    }
+
+    (function restoreColors() {
+      const base = baseColors();
+      applyColors(base.numColor, base.bgColor);
+      try {
+        const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
+        // локальные правки применяем, только если ссылка с тех пор не менялась —
+        // иначе новая ссылка (с новыми цветами) побеждает на всех устройствах
+        const savedBase = saved && saved.base !== undefined ? saved.base : "|";
+        if (saved && saved.numColor && saved.bgColor && savedBase === URL_BASE) {
+          applyColors(saved.numColor, saved.bgColor);
+        }
+      } catch (e) { /* игнорируем повреждённые данные */ }
+    })();
+
+    function positionPanel() {
+      const rect = colorTrigger.getBoundingClientRect();
+      colorPanel.style.right = (window.innerWidth - rect.right) + "px";
+      colorPanel.style.bottom = (window.innerHeight - rect.top + 6) + "px";
+      colorPanel.style.left = "auto";
+      colorPanel.style.top = "auto";
+    }
+
+    function closePanel() {
+      colorPanel.classList.remove("open");
+      shareLinkInput.classList.remove("visible");
+    }
+
+    colorTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const opening = !colorPanel.classList.contains("open");
+      if (opening) positionPanel();
+      if (opening) colorPanel.classList.add("open");
+      else closePanel();
+    });
+
+    window.addEventListener("resize", () => {
+      if (colorPanel.classList.contains("open")) positionPanel();
+    });
+
+    // выход из режима редактирования: тап/клик в любое место вне палитры.
+    // pointerdown вместо click — на iOS click не всплывает до document
+    // с "некликабельных" элементов, поэтому тап мимо палитры раньше не работал
+    document.addEventListener("pointerdown", (e) => {
+      if (!colorPanel.classList.contains("open")) return;
+      if (colorPanel.contains(e.target) || colorTrigger.contains(e.target)) return;
+      closePanel();
+    });
+
+    // клик за пределами виджета (по странице Notion) — iframe теряет фокус.
+    // Не закрываем, если фокус ушёл в системное окно выбора цвета
+    window.addEventListener("blur", () => {
+      const active = document.activeElement;
+      if (active && active.type === "color") return;
+      closePanel();
+    });
+
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") closePanel();
+    });
+
+    numColorInput.addEventListener("input", () => {
+      applyColors(numColorInput.value, bgColorInput.value);
+      saveColors(numColorInput.value, bgColorInput.value);
+    });
+
+    bgColorInput.addEventListener("input", () => {
+      applyColors(numColorInput.value, bgColorInput.value);
+      saveColors(numColorInput.value, bgColorInput.value);
+    });
+
+    resetColorsBtn.addEventListener("click", () => {
+      applyColors(DEFAULT_NUM_COLOR, DEFAULT_BG_COLOR);
+      saveColors(DEFAULT_NUM_COLOR, DEFAULT_BG_COLOR);
+    });
+
+    // ---------- ссылка с текущими цветами для вставки в Notion ----------
+    const copyLinkBtn = document.getElementById("copyLinkBtn");
+    const shareLinkInput = document.getElementById("shareLinkInput");
+
+    function buildShareLink() {
+      const params = new URLSearchParams(location.search);
+      params.set("num", numColorInput.value.replace("#", ""));
+      params.set("bg", bgColorInput.value.replace("#", ""));
+      if (use24h) params.set("h24", "1"); else params.delete("h24");
+      return location.origin + location.pathname + "?" + params.toString();
+    }
+
+    function showCopied() {
+      copyLinkBtn.textContent = "Скопировано ✓";
+      setTimeout(() => { copyLinkBtn.textContent = "Ссылка для Notion"; }, 1800);
+    }
+
+    // запасной путь: показываем ссылку в поле и выделяем её
+    function fallbackCopy(link) {
+      shareLinkInput.value = link;
+      shareLinkInput.classList.add("visible");
+      shareLinkInput.focus();
+      shareLinkInput.select();
+      try {
+        if (document.execCommand("copy")) showCopied();
+      } catch (e) { /* пользователь скопирует вручную */ }
+    }
+
+    copyLinkBtn.addEventListener("click", () => {
+      const link = buildShareLink();
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        // внутри iframe Notion доступ к буферу обмена может быть запрещён
+        navigator.clipboard.writeText(link).then(showCopied, () => fallbackCopy(link));
+      } else {
+        fallbackCopy(link);
+      }
+    });
+  </script>
+</body>
+</html>
