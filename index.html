@@ -238,6 +238,7 @@
     color: #f2f2f2;
   }
   #colorPanel.open { display: flex; }
+  #colorPanel:focus { outline: none; }
 
   .color-row {
     display: flex;
@@ -353,7 +354,7 @@
       </div>
     </div>
 
-    <div id="colorPanel">
+    <div id="colorPanel" tabindex="-1">
       <div class="panel-header">
         <span>Цвета</span>
         <button id="closePanelBtn" type="button" aria-label="Закрыть" title="Закрыть">×</button>
@@ -658,7 +659,7 @@
     // такую потерю фокуса (сразу в момент ухода мышки) игнорируем
     let pointerLeftAt = 0;
     document.documentElement.addEventListener("mouseleave", () => { pointerLeftAt = Date.now(); });
-    document.documentElement.addEventListener("mouseenter", () => { pointerLeftAt = 0; });
+    document.documentElement.addEventListener("mouseenter", () => { pointerLeftAt = 0; reclaimedAfterLeave = false; });
 
     // нажатие на поле цвета открывает системное окно выбора — оно тоже
     // уводит фокус из виджета, и закрывать палитру в этот момент нельзя
@@ -668,10 +669,28 @@
       input.addEventListener("change", () => { colorPickerOpenedAt = 0; });
     });
 
+    // возвращаем фокус виджету, чтобы следующий клик по странице Notion
+    // снова снял его — это единственный сигнал о клике снаружи, который
+    // доступен странице внутри iframe
+    function reclaimFocus() {
+      if (!colorPanel.classList.contains("open")) return;
+      try { colorPanel.focus({ preventScroll: true }); } catch (e) { colorPanel.focus(); }
+    }
+
+    let reclaimedAfterLeave = false;
+
     window.addEventListener("blur", () => {
       if (!colorPanel.classList.contains("open")) return;
       if (colorPickerOpenedAt && Date.now() - colorPickerOpenedAt < 1000) return;
-      if (pointerLeftAt && Date.now() - pointerLeftAt < 400) return;
+      if (pointerLeftAt && Date.now() - pointerLeftAt < 400) {
+        // фокус забрал сам Notion в момент ухода мышки, а не клик —
+        // забираем фокус обратно (один раз за уход, чтобы не спорить с Notion)
+        if (!reclaimedAfterLeave) {
+          reclaimedAfterLeave = true;
+          setTimeout(reclaimFocus, 50);
+        }
+        return;
+      }
       closePanel();
     });
 
